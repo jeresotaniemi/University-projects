@@ -241,7 +241,7 @@ def main():
     Lataa pelin grafiikat, luo peli-ikkunan ja asettaa siihen piirtokäsittelijän.
     """
     luo_kentta()
-    haravasto.lataa_kuvat("C:\\Users\\jeres\\Minesweeper\\spritet.zip\\spritet")
+    haravasto.lataa_kuvat("spritet.zip\\spritet")
     haravasto.luo_ikkuna(len(tila["kentta"][0]) * 40, len(tila["kentta"]) * 40)
     haravasto.aseta_piirto_kasittelija(piirra_kentta)
     haravasto.aseta_hiiri_kasittelija(kasittele_hiiri)
