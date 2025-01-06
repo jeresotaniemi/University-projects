@@ -1,0 +1,368 @@
+# TKJ-harjoitustyö 2023 Fibonacci
+# Jere Sotaniemi, Y69142711, jere.sotaniemi@gmail.com
+#
+# Sources: 
+# https://stackoverflow.com/questions/55539625/how-to-perform-right-shift-in-y86-64-or-other-toy-isas-with-add-and-but-no-na
+# I used the code on this site for more efficient bit shifts to the right. Subroutines in 0x500 are created with the help of this site.
+#
+# https://github.com/lottarantala/peasant-multiplication/blob/main/tehokkaampi_kertolasku.ys
+# I found example of the peasant multiplication in github which I modified so it works in my code. 
+#
+# Thinking process:
+# - Amount of steps: There was steps from about 20k to 70k, depending on the length of the sequence and/or if it was fibonacci sequence or not.
+#     - I think that is pretty ok, since there was quite a few moments I wasn't sure what to do but still managed to succeed in the end.
+#      - Atleast the code works and it returns right values in %rax.
+# - Optimizing: I optimized the code by having bit shifts in subroutines in pos 0x500 and I called them from there and it seems to works fine.
+#      - Of course, peasant multiplication worked here. At first, I made much slower version of it in the exercises and it didnt pass the 10,000 step ceiling,
+#         so using it in this code would have probably pushed the steps over 100,000.
+#      - Another, less significant, thing was that I had for example (irmovq $0, %rsi and then addq %rdi, %rsi) in many occasions, I changed them to rrmovq %rdi, %rsi.
+#         Probably didn't change much but maybe couple hundred steps.
+#  - What could I do to optimize more?
+#      - I think maybe the best way to optimize this further would be changing both sqrt and the multiplication to subroutines and then calling them. I didn't have time
+#         to look at that, but it seems that it would be quite a lot of work. 
+#      - I also think that some of the variables could have been used better.
+
+main:
+    	irmovq array, %rsp	#pointer to array
+    	irmovq array, %rbp	#base pointer
+	
+
+start_again:
+    #set up variables for calculating (5 * x * x + 4)
+    irmovq $0, %rax			#result for multiplication
+	irmovq $1, %rdx         #used for moving
+	irmovq $1, %r8          #used for checking LSB
+    irmovq $1, %r9         	#used for subtracting 
+    irmovq $40, %r13        #times to check
+    
+    popq %r11				#pop the top element of the array
+    rrmovq %r11, %r12		#move it to %r12 to help calculations
+    
+    irmovq fibo_number, %r14	
+    rmmovq %r11, 0(%r14)	#add the popped number to stack 'fibo_number', needed in the end if that number isn't fibo number
+    irmovq $0, %r14
+    
+    subq %rax, %r11			#check if the popped number is 0
+    je is_fibonacci			#if it is, array is clear -> jump to is_fibonacci to stop the code
+    
+
+#Start by calculating ( x * x )
+	rrmovq %r11, %r10		#move %r11 to %r10
+	andq %r8, %r10			#check the LSB of %r11, (1 = odd, 0 = even)
+	cmovg %r12, %rax		#if LSB = 1, move the multiplicator to %rax
+    
+setupmulti:
+	addq %r9, %rdx 			#check the current bit
+	addq %r8, %r8			#move one bit left
+	subq %r9, %r13			#reduce times to check by 1
+	jl addition				#if times to check is 0, jump to addition
+
+	rrmovq %r11, %r10		#if not 0, move the new multiplicator to %r10
+	andq %r8, %r10			#check the LSB of %r11
+	cmovge %rdx, %r10		#if LSB = 1, move the moving constant to %r10
+	jg multiplication		#add_continue to multiplication
+
+	jmp setupmulti			#if LSB = 0, start loop again, no multiplication needed
+
+multiplication:
+	addq %rcx, %rcx			#%rcx * 2, %rcx is used to calculate result
+	subq %rbx, %rcx			#compare %rcx to 0
+	cmove %r12, %rcx		#if %rcx = 0, move %r12 to %rcx
+	subq %r9, %r10			#and reduce times to move by 1
+	jg multiplication		#if times to move != 0, loop again
+
+	addq %rcx, %rax			#add %rcx to result
+	irmovq $0, %rcx			#reset %rcx back to 0
+	jmp setupmulti
+
+addition:					#set up the variables for multiplicating (x * x) by 5
+	irmovq $0, %rcx
+	irmovq $1, %rdx
+	irmovq $5, %rsi
+
+addition_end:				#calculate (5 * x * x)
+	addq %rax, %rcx
+	subq %rdx, %rsi
+	jne addition_end	
+
+	irmovq $4, %rbx			#add 4 to get the needed result of function (5 * x * x + 4)
+	addq %rbx, %rcx
+	rrmovq %rcx, %rdi 		#store the result so it can be used further in the code for comparing
+	
+#Calculate the sqrt of (5 * x * x + 4) and compare sqrt * sqrt to (5 * x * x + 4)
+
+#Set up variables for calculating sqrt
+rrmovq %rcx, %r12			#move (5 * x * x + 4) to %r12
+irmovq $0, %rcx 			#res = 0
+irmovq $16777216, %rbx 		#bit = 1 << 24 -> 16777216, so sqrt can handle bigger numbers
+irmovq $1, %rax				#used for reducing times to move the bits
+
+add_sqrtloop1:
+    irmovq $62, %r8			#times to move the bit: 64 - x, x = times to move the bit, in this case 2 times
+    xorq %r9,%r9			#clear %r9, result of bit shift stored here
+   	call rshift_bit			#bit >> 2
+    
+	rrmovq %r12, %rsi		#move  (5 * x * x + 4) to %rsi to check while:
+	subq %rbx, %rsi			#while bit > num
+	jge add_sqrtloop2		#continue calculating if false
+	
+	jmp add_sqrtloop1		#otherwise loop again
+
+add_sqrtloop2:
+	subq %r14, %rbx			#while bit != 0
+	je add_setupmulti		#start multiplication of sqrt * sqrt if false
+    
+	#otherwise continue calculating sqrt
+	rrmovq %rcx, %r10		#store res to r10
+	addq %rbx, %r10			#res + bit in r10
+
+	irmovq $63, %r8			#times to move bit, 1
+	xorq %rdx, %rdx			#clear %rdx, result of bit shift stored here
+	call rshift_res			#res >> 1
+    
+    irmovq $0, %r13
+	addq %r12, %r13			#add num to %r13, so if works
+	subq %r10, %r13			#if (num >= res + bit)
+	jge add_greater			#if true, jump to "greater"
+
+	#else, res >>= 1, done this earlier so no code needed here.
+
+	jmp add_continue		#jump over "greater"
+
+
+add_greater:
+	subq %r10, %r12			#num -= res + bit
+    
+    irmovq $0, %r11
+	addq %rbx, %r11			#add bit to r11
+	addq %rdx, %r11			#res = (res >> 1) + bit
+	irmovq $0, %rcx
+	addq %r11, %rcx			#add (res >> 1 + bit) back to %rcx
+add_continue:
+	irmovq $62, %r8			#times to move bit, 1
+	xorq %r9, %r9			#clear %r9, result of bit shift stored here
+	call rshift_bit			#bit >>= 2
+	jmp add_sqrtloop2		#loop sqrt again
+
+add_setupmulti:				#setup variables for multiplication
+	irmovq $0, %rax			#result of sqrt * sqrt
+	irmovq $1, %rdx         #used for moving
+	irmovq $1, %r8          #used for checking LSB
+    irmovq $1, %r9         	#used for subtracting 
+    irmovq $0, %rbx         #used for comparing
+    irmovq $40, %r13        #times to check
+    
+	rrmovq %rcx, %r11		#move the answer of the sqrt to %r11
+	rrmovq %rcx, %r12		#and %r12 to calculate their multiplication
+	irmovq $0, %rcx 		#after that set this to 0 since it's used to calculate result
+    
+	rrmovq %r11, %r10		#move %r11 to %r10
+	andq %r8, %r10			#check the LSB of %r11, (1 = odd, 0 = even)
+	cmovg %r12, %rax		#if LSB = 1, move the multiplicator to %rax
+    
+add_checkmulti:
+	addq %r9, %rdx 			#check the current bit
+	addq %r8, %r8			#move one bit left
+	subq %r9, %r13			#reduce times to check by 1
+	jl add_compare		    #if times to check is 0, compare sqrt * sqrt to (5 * x * x + 4)
+
+	rrmovq %r11, %r10		#if not 0, move the new multiplicator to %r10
+	andq %r8, %r10			#check the LSB of %r11
+	cmovge %rdx, %r10		#if LSB = 1, move the moving constant to %r10
+	jg add_multiplication	#add_continue to multiplication
+
+	jmp add_checkmulti		#if LSB = 0, start loop again, no multiplication needed
+
+add_multiplication:
+	addq %rcx, %rcx			#%rcx * 2
+	subq %rbx, %rcx			#compare %rcx to 0
+	cmove %r12, %rcx		#if %rcx = 0, move %r12 to %rcx
+	subq %r9, %r10			#and reduce times to move by 1
+	jg add_multiplication	#if times to move != 0, loop again
+
+	addq %rcx, %rax			#add %rcx to result
+	irmovq $0, %rcx			#reset %rcx back to 0
+	jmp add_checkmulti
+	
+add_compare:				#compare sqrt * sqrt to (5 * x * x + 4)
+    irmovq $8, %r14
+    addq %r14, %rsp			#add 8 to rsp so next value in array can be popped
+    irmovq $0, %r14
+	subq %rdi, %rax			#compare sqrt * sqrt to (5 * x * x + 4)
+	je start_again			#if they are same, start loop all over again
+	
+#if not same, continue to calculate subtraction
+subtraction:			
+	rrmovq %rdi, %rcx		#move the answer of (5 * x * x + 4) to %rcx
+	irmovq $8, %rbx		
+	subq %rbx, %rcx			#subtract by 8 to get (5 * x * x - 4)
+	rrmovq %rcx, %rdi   	#store (5 * x * x - 4) to %rdi so it can be used in latter compare
+
+
+#Next calculate the sqrt of (5 * x * x - 4) and compare sqrt * sqrt to (5 * x * x - 4)
+
+#Set up variables for calculating sqrt
+rrmovq %rcx, %r12			#move (5 * x * x - 4) to %r12
+irmovq $0, %rcx 			#res = 0
+irmovq $16777216, %rbx 		#bit = 1 << 24 -> 16777216, so sqrt can handle bigger values
+irmovq $1, %rax				#used for reducing times to move the bits
+
+sub_sqrtloop1:
+    irmovq $62, %r8 		#times to move the bit, 2
+    xorq %r9,%r9			#clear %r9, result of bit shift stored here
+   	call sub_rshift_bit 	#bit >> 2
+
+    rrmovq %r12, %rsi		#move  (5 * x * x - 4) to %rsi to check while:
+	subq %rbx, %rsi			#while bit > num
+	jge sub_sqrtloop2		#continue calculating if false
+	
+	jmp sub_sqrtloop1		#otherwise loop again
+
+sub_sqrtloop2:
+	subq %r14, %rbx			#while bit != 0
+	je sub_setupmulti		#start multiplication of sqrt * sqrt if false
+
+	#otherwise continue calculating sqrt
+	rrmovq %rcx, %r10		#store res to r10
+	addq %rbx, %r10			#res + bit in r10
+
+	irmovq $63, %r8			#times to move the bit, 1
+	xorq %rdx, %rdx			#clear %rdx, result of bit shift stored here
+	call rshift_res			#res >> 1
+
+	rrmovq %r12, %r13		#add num to %r13, so if works
+	subq %r10, %r13			#if (num >= res + bit)
+	jge sub_greater		    #if true, jump to "greater"
+    
+	#else, res >>= 1, done this earlier so no code needed here.
+
+	jmp sub_add_continue	#jump over "greater"
+
+sub_greater:
+	subq %r10, %r12			#num -= res + bit
+    
+	rrmovq %rbx, %r11		#add bit to r11
+	addq %rdx, %r11			#res = (res >> 1) + bit
+	rrmovq %r11, %rcx		#add (res >> 1) + bit back to %rcx
+
+sub_add_continue:
+	irmovq $62, %r8			#times to move the bit, 2
+	xorq %r9, %r9			#clear %rdx, result of bit shift stored here
+	call sub_rshift_bit		#bit >>= 2
+	jmp sub_sqrtloop2		#loop sqrt again
+
+sub_setupmulti:				#setup variables for multiplication
+	irmovq $0, %rax			#result of sqrt * sqrt
+	irmovq $1, %rdx     	#used for moving
+	irmovq $1, %r8      	#used for checking LSB
+    irmovq $1, %r9      	#used for subtracting 
+    irmovq $0, %rbx     	#used for comparing
+    irmovq $40, %r13    	#times to check
+    
+	rrmovq %rcx, %r11		#move the answer of the sqrt to %r11
+	rrmovq %rcx, %r12		#and %r12 to calculate their multiplication
+	irmovq $0, %rcx 		#after that set this to 0 since it's used to calculate result
+    
+	rrmovq %r11, %r10		#move %r11 to %r10
+	andq %r8, %r10			#check the LSB of %r11, (1 = odd, 0 = even)
+	cmovg %r12, %rax		#if LSB = 1, move the multiplicator to %rax
+	
+
+sub_checkmulti:
+	addq %r9, %rdx 			#check the current bit
+	addq %r8, %r8			#move one bit left
+	subq %r9, %r13			#reduce times to check by 1
+
+	jl sub_compare			#if times to check is 0, compare sqrt * sqrt to (5 * x * x + 4)
+
+	rrmovq %r11, %r10		#if not 0, move the new multiplicator to %r10
+	andq %r8, %r10			#check the LSB of %r11
+	cmovge %rdx, %r10		#if LSB = 1, move the moving constant to %r10
+	jg sub_multiplication	#add_continue to multiplication
+
+	jmp sub_checkmulti		#if LSB = 0, start loop again, no multiplication needed
+
+sub_multiplication:
+	addq %rcx, %rcx			#%rcx * 2
+	subq %rbx, %rcx			#compare %rcx to 0
+	cmove %r12, %rcx		#if %rcx = 0, move %r12 to %rcx
+	subq %r9, %r10			#and reduce times to move by 1
+	jg sub_multiplication	#if times to move != 0, loop again
+
+	addq %rcx, %rax			#add %rcx to result
+	irmovq $0, %rcx			#reset %rcx back to 0
+	jmp sub_checkmulti
+
+sub_compare:				#compare sqrt * sqrt to (5 * x * x - 4)
+    irmovq $8, %r14		
+    addq %r14, %rsp			#add 8 to rsp so next value in array can be popped
+    irmovq $0, %r14		
+	subq %rdi, %rax			#compare sqrt * sqrt to (5 * x * x - 4)
+	je start_again			#if both are same, start whole loop again
+	
+	jmp not_fibonacci		#if not, jump to not_fibonacci to return right value and stop the code
+
+is_fibonacci:				#set the register rax to 0 if all the numbers belong to fibonacci sequence
+   irmovq $0, %rax
+	halt
+	
+not_fibonacci:				#move the number that is not in fibonacci sequence in rax and stop the code
+    irmovq fibo_number, %r14
+    mrmovq 0(%r14), %rax
+    halt
+
+
+.pos 0x500
+rshift_res:
+	addq %rdx, %rdx			#start adding the bit shift to %rdx after %rcx is "full"
+	andq %rcx, %rcx			#clears %rcx after the result is being added to %rdx
+	jge MSB_zero_res		
+	xorq %rax, %rdx			#rdx ^= 1
+
+MSB_zero_res:
+	addq %rcx, %rcx			#moves one step left (<< 1)
+	subq %rax, %r8			#reduce times to move the bit by 1
+	jne rshift_res
+	
+	addq %rdx, %rcx
+	ret
+
+rshift_bit:
+	addq %r9, %r9			#start adding the bit shift to %r9 after %rbx is "full"
+	andq %rbx, %rbx			#clears %rbx after the result is being added to %r9
+	jge MSB_zero_bit
+	xorq %rax, %r9			#r9 ^= 1
+
+MSB_zero_bit:
+	addq %rbx, %rbx			#moves one step left (<< 1)
+	subq %rax, %r8			#reduce times to move the bit by 1
+	jne rshift_bit
+	
+	subq %r14, %rbx  		#if bit is 0
+	jg add_setupmulti     	#jump to multiplicating sqrt
+	
+	addq %r9, %rbx			#add the shifted bit back to %r9
+	ret						#return
+	
+sub_rshift_bit:
+	addq %r9, %r9			#start adding the bit shift to %r9 after %rbx is "full"
+	andq %rbx, %rbx			#clears %rbx after the result is being added to %r9
+	jge sub_MSB_zero_bit
+	xorq %rax, %r9			#r9 ^= 1
+	
+sub_MSB_zero_bit:
+	addq %rbx, %rbx			#moves one step left (<< 1)
+	subq %rax, %r8			#reduce times to move the bit by 1
+	jne sub_rshift_bit
+	
+	subq %r14, %rbx  		#if bit is 0
+	jg sub_setupmulti    	#jump to multiplicating sqrt
+	
+	addq %r9, %rbx			#add the shifted bit back to %r9
+	ret						#return
+
+.pos 0x600					#used to store the number that is being used at that time
+fibo_number:				#So if the current number is not a fibonacci number, this stack can be used to store the non-fibonacci number in right register
+
+.pos 0x700				
+array:						#array to store the fibonacci sequence here
